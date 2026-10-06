@@ -7,7 +7,7 @@ import SwiftUI
 import Photos
 
 struct AssetGridView: View {
-    @StateObject private var viewModel: AssetListViewModel
+    @State private var viewModel: AssetListViewModel
     @State private var selectedAsset: PHAsset?
     
     private let columns = [
@@ -17,7 +17,7 @@ struct AssetGridView: View {
     ]
     
     init(category: GalleryCategory) {
-        _viewModel = StateObject(wrappedValue: AssetListViewModel(category: category))
+        _viewModel = State(wrappedValue: AssetListViewModel(category: category))
     }
     
     var body: some View {
@@ -40,7 +40,7 @@ struct AssetGridView: View {
                 ContentUnavailableView(
                     "No \(viewModel.category.title) Found",
                     systemImage: viewModel.category.iconName,
-                    description: Text("Your photo library doesn't contain any items in this category.")
+                    description: Text(emptyStateText)
                 )
             } else {
                 ScrollView {
@@ -97,12 +97,25 @@ struct AssetGridView: View {
         return nil
     }
     
+    private var emptyStateText: String {
+        if viewModel.category == .largeVideos {
+            return "No videos exceeding \(AppSettings.formatMB(AppSettings.shared.largeVideoThresholdMB)) found. You can adjust this in Settings."
+        }
+        return "Your photo library doesn't contain any items in this category."
+    }
+    
     @ViewBuilder
     private var summaryBar: some View {
         HStack {
             Text("\(viewModel.assets.count) items")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
+            
+            if viewModel.category == .largeVideos {
+                Text("(≥ \(AppSettings.formatMB(AppSettings.shared.largeVideoThresholdMB)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             
             Spacer()
             

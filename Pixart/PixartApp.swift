@@ -8,34 +8,50 @@ import Photos
 
 @main
 struct PixartApp: App {
-    @StateObject private var photoService = PhotoLibraryService.shared
-    
     var body: some Scene {
         WindowGroup {
-            Group {
-                switch photoService.authorizationStatus {
-                case .authorized, .limited:
-                    HomeView()
-                    
-                case .notDetermined:
-                    PermissionRequestView()
-                    
-                case .denied, .restricted:
-                    PermissionDeniedView()
-                    
-                @unknown default:
-                    PermissionDeniedView()
+            RootView()
+                .environment(PhotoLibraryService.shared)
+                .environment(AppSettings.shared)
+        }
+    }
+}
+
+// MARK: - Root View
+struct RootView: View {
+    @Environment(PhotoLibraryService.self) private var photoService
+    @Environment(\.scenePhase) private var scenePhase
+    
+    var body: some View {
+        Group {
+            switch photoService.authorizationStatus {
+            case .authorized, .limited:
+                HomeView()
+                
+            case .notDetermined:
+                PermissionRequestView()
+                
+            case .denied, .restricted:
+                PermissionDeniedView()
+                
+            @unknown default:
+                PermissionDeniedView()
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: photoService.authorizationStatus)
+        .task {
+            photoService.checkAuthorization()
+            #if DEBUG
+            if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
+                Task.detached {
+                    _ = await AppDiagnostics.runDiagnostics()
                 }
             }
-            .task {
+            #endif
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
                 photoService.checkAuthorization()
-                #if DEBUG
-                if photoService.authorizationStatus == .authorized || photoService.authorizationStatus == .limited {
-                    Task.detached {
-                        _ = await AppDiagnostics.runDiagnostics()
-                    }
-                }
-                #endif
             }
         }
     }
@@ -43,7 +59,8 @@ struct PixartApp: App {
 
 // MARK: - Permission Prompt View
 struct PermissionRequestView: View {
-    @ObservedObject var photoService = PhotoLibraryService.shared
+    @Environment(PhotoLibraryService.self) private var photoService
+    @State private var isRequesting = false
     
     var body: some View {
         VStack(spacing: 24) {
@@ -73,17 +90,27 @@ struct PermissionRequestView: View {
             Spacer()
             
             Button {
+                guard !isRequesting else { return }
+                isRequesting = true
                 Task {
                     _ = await photoService.requestAuthorization()
+                    isRequesting = false
                 }
             } label: {
-                Text("Allow Photo Access")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
+                HStack(spacing: 8) {
+                    if isRequesting {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text("Allow Photo Access")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(isRequesting)
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }

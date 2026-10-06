@@ -7,9 +7,11 @@ import SwiftUI
 import Photos
 
 struct HomeView: View {
-    @ObservedObject var photoService = PhotoLibraryService.shared
-    @StateObject private var viewModel = HomeViewModel()
+    @Environment(PhotoLibraryService.self) private var photoService
+    @Environment(AppSettings.self) private var settings
+    @State private var viewModel = HomeViewModel()
     @State private var navigationPath = NavigationPath()
+    @State private var showingSettings = false
     
     private let columns = [
         GridItem(.flexible(), spacing: 14),
@@ -55,9 +57,28 @@ struct HomeView: View {
                     AssetGridView(category: category)
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.body.weight(.medium))
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
             .refreshable {
                 viewModel.refreshCounts()
             }
+        }
+        .sheet(isPresented: $showingSettings, onDismiss: {
+            viewModel.refreshCounts()
+        }) {
+            SettingsView()
+        }
+        .onChange(of: settings.largeVideoThresholdMB) { _, _ in
+            viewModel.refreshCounts()
         }
         .onAppear {
             viewModel.refreshCounts()
@@ -70,6 +91,11 @@ struct HomeView: View {
     
     private func handleCommandLineArguments() {
         let args = ProcessInfo.processInfo.arguments
+        if args.contains("-settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                showingSettings = true
+            }
+        }
         if let idx = args.firstIndex(of: "-category"), idx + 1 < args.count {
             let catArg = args[idx + 1].lowercased()
             if let matched = GalleryCategory.allCases.first(where: { $0.rawValue.lowercased() == catArg }) {
@@ -81,6 +107,10 @@ struct HomeView: View {
     }
     
     private func handleDeepLink(_ url: URL) {
+        if url.host == "settings" || url.lastPathComponent == "settings" {
+            showingSettings = true
+            return
+        }
         let catArg = url.lastPathComponent.lowercased()
         if let matched = GalleryCategory.allCases.first(where: { $0.rawValue.lowercased() == catArg }) {
             navigationPath = NavigationPath([matched])

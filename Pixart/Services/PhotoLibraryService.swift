@@ -6,33 +6,58 @@
 import UIKit
 import Photos
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class PhotoLibraryService: NSObject, ObservableObject {
+final class PhotoLibraryService: NSObject {
     static let shared = PhotoLibraryService()
     
-    @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
+    var authorizationStatus: PHAuthorizationStatus = .notDetermined
+    
+    @ObservationIgnored
     let libraryChangePublisher = PassthroughSubject<PHChange, Never>()
     
+    @ObservationIgnored
     private let imageManager = PHCachingImageManager()
+    
+    @ObservationIgnored
+    private var isObserverRegistered = false
     
     override init() {
         super.init()
-        self.authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        PHPhotoLibrary.shared().register(self)
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        self.authorizationStatus = status
+        print("[PhotoLibraryService] init status=\(status.rawValue)")
+        registerObserverIfNeeded()
     }
     
     deinit {
-        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        if isObserverRegistered {
+            PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        }
+    }
+    
+    func registerObserverIfNeeded() {
+        guard !isObserverRegistered else { return }
+        if authorizationStatus == .authorized || authorizationStatus == .limited {
+            PHPhotoLibrary.shared().register(self)
+            isObserverRegistered = true
+        }
     }
     
     func checkAuthorization() {
-        authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        authorizationStatus = status
+        print("[PhotoLibraryService] checkAuthorization status=\(status.rawValue)")
+        registerObserverIfNeeded()
     }
     
     func requestAuthorization() async -> PHAuthorizationStatus {
         let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         self.authorizationStatus = status
+        print("[PhotoLibraryService] requestAuthorization returned status=\(status.rawValue)")
+        registerObserverIfNeeded()
         return status
     }
     
@@ -139,6 +164,7 @@ final class PhotoLibraryService: NSObject, ObservableObject {
 // MARK: - PHPhotoLibraryChangeObserver
 extension PhotoLibraryService: PHPhotoLibraryChangeObserver {
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        LargeVideoService.clearCache()
         Task { @MainActor in
             self.libraryChangePublisher.send(changeInstance)
         }

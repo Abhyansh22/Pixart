@@ -60,9 +60,9 @@ nonisolated enum GalleryCategory: String, CaseIterable, Identifiable, Sendable {
         case .similarPhotos:
             return "photo.stack.fill"
         case .duplicateVideos:
-            return "arrow.triangle.2.circlepath.circle.fill"
+            return "photo.on.rectangle.fill"
         case .largeVideos:
-            return "arrow.down.circle.fill"
+            return "opticaldiscdrive"
         }
     }
     

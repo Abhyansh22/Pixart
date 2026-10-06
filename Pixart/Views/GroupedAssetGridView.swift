@@ -7,11 +7,11 @@ import SwiftUI
 import Photos
 
 struct GroupedAssetGridView: View {
-    @StateObject private var viewModel: GroupedAssetViewModel
+    @State private var viewModel: GroupedAssetViewModel
     @State private var selectedAsset: PHAsset?
     
     init(category: GalleryCategory) {
-        _viewModel = StateObject(wrappedValue: GroupedAssetViewModel(category: category))
+        _viewModel = State(wrappedValue: GroupedAssetViewModel(category: category))
     }
     
     var body: some View {

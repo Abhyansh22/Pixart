@@ -6,13 +6,17 @@
 import Photos
 import SwiftUI
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class HomeViewModel: ObservableObject {
-    @Published var counts: [GalleryCategory: Int] = [:]
-    @Published var isLoadingCounts: Bool = false
+final class HomeViewModel {
+    var counts: [GalleryCategory: Int] = [:]
+    var isLoadingCounts: Bool = false
     
+    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored
     private var countTask: Task<Void, Never>?
     
     init() {
@@ -32,14 +36,17 @@ final class HomeViewModel: ObservableObject {
             
             async let screenshotsCount = ScreenshotService.fetchCount()
             async let videosCount = VideoService.fetchCount()
+            let threshold = AppSettings.shared.largeVideoThresholdBytes
+            async let largeVideosCount = LargeVideoService.fetchCount(minThresholdBytes: threshold)
             
             let scCount = await screenshotsCount
             let vCount = await videosCount
+            let lvCount = await largeVideosCount
             
             if !Task.isCancelled {
                 counts[.screenshots] = scCount
                 counts[.videos] = vCount
-                counts[.largeVideos] = vCount // Same pool of videos
+                counts[.largeVideos] = lvCount
             }
             isLoadingCounts = false
         }

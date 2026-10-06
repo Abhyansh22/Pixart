@@ -6,16 +6,20 @@
 import Photos
 import SwiftUI
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class GroupedAssetViewModel: ObservableObject {
-    @Published var groups: [AssetGroup] = []
-    @Published var isLoading: Bool = false
-    @Published var progressStage: String?
-    @Published var progressFraction: Double?
+final class GroupedAssetViewModel {
+    var groups: [AssetGroup] = []
+    var isLoading: Bool = false
+    var progressStage: String?
+    var progressFraction: Double?
     
     let category: GalleryCategory
+    @ObservationIgnored
     private var scanTask: Task<Void, Never>?
+    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
     
     init(category: GalleryCategory) {

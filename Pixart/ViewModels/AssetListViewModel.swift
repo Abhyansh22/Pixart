@@ -6,16 +6,20 @@
 import Photos
 import SwiftUI
 import Combine
+import Observation
 
+@Observable
 @MainActor
-final class AssetListViewModel: ObservableObject {
-    @Published var assets: [PHAsset] = []
-    @Published var fileSizes: [String: Int64] = [:]
-    @Published var isLoading: Bool = false
-    @Published var progressMessage: String?
+final class AssetListViewModel {
+    var assets: [PHAsset] = []
+    var fileSizes: [String: Int64] = [:]
+    var isLoading: Bool = false
+    var progressMessage: String?
     
     let category: GalleryCategory
+    @ObservationIgnored
     private var loadTask: Task<Void, Never>?
+    @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
     
     init(category: GalleryCategory) {
@@ -50,7 +54,8 @@ final class AssetListViewModel: ObservableObject {
                 
             case .largeVideos:
                 progressMessage = "Scanning video storage sizes…"
-                let result = await LargeVideoService.fetchLargeVideos { [weak self] done, total in
+                let threshold = AppSettings.shared.largeVideoThresholdBytes
+                let result = await LargeVideoService.fetchLargeVideos(minThresholdBytes: threshold) { [weak self] done, total in
                     Task { @MainActor in
                         self?.progressMessage = "Scanning videos (\(done)/\(total))…"
                     }
