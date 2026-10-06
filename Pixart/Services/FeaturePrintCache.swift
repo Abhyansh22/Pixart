@@ -5,108 +5,51 @@
 
 import Foundation
 import Vision
-import SQLite3
+import SwiftData
 
-/// Thread-safe SQLite cache for Vision VNFeaturePrintObservation data.
+// MARK: - SwiftData Persistent Model
+
+@Model
+final class CachedFeaturePrint {
+    @Attribute(.unique) var localIdentifier: String
+    @Attribute(.externalStorage) var featureData: Data
+    var aspectBand: Int
+    var weekBucket: Int64
+    
+    init(localIdentifier: String, featureData: Data, aspectBand: Int, weekBucket: Int64) {
+        self.localIdentifier = localIdentifier
+        self.featureData = featureData
+        self.aspectBand = aspectBand
+        self.weekBucket = weekBucket
+    }
+}
+
+// MARK: - SwiftData ModelActor Cache
+
+/// Thread-safe SwiftData cache for Vision VNFeaturePrintObservation data.
+@ModelActor
 actor FeaturePrintCache {
-    static let shared = FeaturePrintCache()
+    static let shared: FeaturePrintCache = {
+        cleanLegacyDatabaseIfNeeded()
+        do {
+            let schema = Schema([CachedFeaturePrint.self])
+            let config = ModelConfiguration("FeaturePrintStore", isStoredInMemoryOnly: false)
+            let container = try ModelContainer(for: schema, configurations: [config])
+            return FeaturePrintCache(modelContainer: container)
+        } catch {
+            fatalError("Failed to initialize ModelContainer for FeaturePrintCache: \(error)")
+        }
+    }()
     
-    private var db: OpaquePointer?
-    private let dbPath: String
-    
-    init() {
+    /// Cleans up legacy SQLite file from previous versions if present
+    private static func cleanLegacyDatabaseIfNeeded() {
         let fileManager = FileManager.default
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        try? fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        let path = appSupport.appendingPathComponent("feature_prints_v1.sqlite").path
-        self.dbPath = path
-    }
-    
-    deinit {
-        if let db = db {
-            sqlite3_close(db)
-        }
-    }
-    
-    private func ensureDatabaseOpen() {
-        guard db == nil else { return }
-        if sqlite3_open(dbPath, &db) == SQLITE_OK {
-            createTable()
-        } else {
-            print("[FeaturePrintCache] Failed to open database at \(dbPath)")
-        }
-    }
-    
-    private func createTable() {
-        let sql = """
-        CREATE TABLE IF NOT EXISTS feature_prints (
-            local_identifier TEXT PRIMARY KEY,
-            feature_data BLOB NOT NULL,
-            aspect_band INTEGER NOT NULL,
-            week_bucket INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_bucket ON feature_prints (aspect_band, week_bucket);
-        """
-        var errMsg: UnsafeMutablePointer<CChar>?
-        if sqlite3_exec(db, sql, nil, nil, &errMsg) != SQLITE_OK {
-            if let err = errMsg {
-                print("[FeaturePrintCache] Error creating table: \(String(cString: err))")
-                sqlite3_free(errMsg)
+        if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let legacySQLite = appSupport.appendingPathComponent("feature_prints_v1.sqlite")
+            if fileManager.fileExists(atPath: legacySQLite.path) {
+                try? fileManager.removeItem(at: legacySQLite)
             }
         }
-    }
-    
-    /// Returns the set of all asset identifiers already present in the cache.
-    func getAllCachedIdentifiers() -> Set<String> {
-        ensureDatabaseOpen()
-        var identifiers = Set<String>()
-        let sql = "SELECT local_identifier FROM feature_prints;"
-        var statement: OpaquePointer?
-        
-        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            while sqlite3_step(statement) == SQLITE_ROW {
-                if let cStr = sqlite3_column_text(statement, 0) {
-                    identifiers.insert(String(cString: cStr))
-                }
-            }
-        }
-        sqlite3_finalize(statement)
-        return identifiers
-    }
-    
-    /// Saves a batch of feature prints to the database inside a transaction.
-    func saveBatch(items: [(id: String, observation: VNFeaturePrintObservation, aspectBand: Int, weekBucket: Int64)]) {
-        ensureDatabaseOpen()
-        guard !items.isEmpty else { return }
-        
-        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
-        
-        let sql = "INSERT OR REPLACE INTO feature_prints (local_identifier, feature_data, aspect_band, week_bucket) VALUES (?, ?, ?, ?);"
-        var statement: OpaquePointer?
-        
-        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            for item in items {
-                do {
-                    let data = try NSKeyedArchiver.archivedData(withRootObject: item.observation, requiringSecureCoding: true)
-                    
-                    sqlite3_bind_text(statement, 1, (item.id as NSString).utf8String, -1, nil)
-                    data.withUnsafeBytes { rawBuffer in
-                        sqlite3_bind_blob(statement, 2, rawBuffer.baseAddress, Int32(rawBuffer.count), nil)
-                    }
-                    sqlite3_bind_int(statement, 3, Int32(item.aspectBand))
-                    sqlite3_bind_int64(statement, 4, item.weekBucket)
-                    
-                    if sqlite3_step(statement) != SQLITE_DONE {
-                        print("[FeaturePrintCache] Failed to insert item \(item.id)")
-                    }
-                    sqlite3_reset(statement)
-                } catch {
-                    print("[FeaturePrintCache] Failed to archive observation: \(error)")
-                }
-            }
-        }
-        sqlite3_finalize(statement)
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
     }
     
     struct CachedPrint: @unchecked Sendable {
@@ -116,54 +59,78 @@ actor FeaturePrintCache {
         let weekBucket: Int64
     }
     
-    /// Loads all cached feature prints.
-    func loadAll() -> [CachedPrint] {
-        ensureDatabaseOpen()
-        var results = [CachedPrint]()
-        let sql = "SELECT local_identifier, feature_data, aspect_band, week_bucket FROM feature_prints;"
-        var statement: OpaquePointer?
+    /// Returns the set of all asset identifiers already present in the cache.
+    func getAllCachedIdentifiers() -> Set<String> {
+        var descriptor = FetchDescriptor<CachedFeaturePrint>()
+        descriptor.propertiesToFetch = [\.localIdentifier]
+        guard let prints = try? modelContext.fetch(descriptor) else { return [] }
+        return Set(prints.map(\.localIdentifier))
+    }
+    
+    /// Saves a batch of feature prints to SwiftData.
+    func saveBatch(items: [(id: String, observation: VNFeaturePrintObservation, aspectBand: Int, weekBucket: Int64)]) {
+        guard !items.isEmpty else { return }
         
-        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            while sqlite3_step(statement) == SQLITE_ROW {
-                guard let idCStr = sqlite3_column_text(statement, 0),
-                      let blobBytes = sqlite3_column_blob(statement, 1) else {
-                    continue
-                }
-                let blobCount = sqlite3_column_bytes(statement, 1)
-                let id = String(cString: idCStr)
-                let aspectBand = Int(sqlite3_column_int(statement, 2))
-                let weekBucket = sqlite3_column_int64(statement, 3)
-                let data = Data(bytes: blobBytes, count: Int(blobCount))
-                
-                if let observation = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: data) {
-                    results.append(CachedPrint(
-                        identifier: id,
-                        observation: observation,
-                        aspectBand: aspectBand,
-                        weekBucket: weekBucket
-                    ))
-                }
+        for item in items {
+            do {
+                let data = try NSKeyedArchiver.archivedData(withRootObject: item.observation, requiringSecureCoding: true)
+                let model = CachedFeaturePrint(
+                    localIdentifier: item.id,
+                    featureData: data,
+                    aspectBand: item.aspectBand,
+                    weekBucket: item.weekBucket
+                )
+                modelContext.insert(model)
+            } catch {
+                print("[FeaturePrintCache] Failed to archive observation for \(item.id): \(error)")
             }
         }
-        sqlite3_finalize(statement)
+        
+        do {
+            try modelContext.save()
+        } catch {
+            print("[FeaturePrintCache] Failed to save batch: \(error)")
+        }
+    }
+    
+    /// Loads all cached feature prints.
+    func loadAll() -> [CachedPrint] {
+        let descriptor = FetchDescriptor<CachedFeaturePrint>()
+        guard let models = try? modelContext.fetch(descriptor) else { return [] }
+        
+        var results = [CachedPrint]()
+        results.reserveCapacity(models.count)
+        
+        for model in models {
+            if let observation = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: model.featureData) {
+                results.append(CachedPrint(
+                    identifier: model.localIdentifier,
+                    observation: observation,
+                    aspectBand: model.aspectBand,
+                    weekBucket: model.weekBucket
+                ))
+            }
+        }
         return results
     }
     
-    /// Removes specified identifiers from the cache (e.g. when deleted from library).
+    /// Removes specified identifiers from the cache (e.g. when deleted from photo library).
     func remove(identifiers: [String]) {
-        ensureDatabaseOpen()
         guard !identifiers.isEmpty else { return }
-        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
-        let sql = "DELETE FROM feature_prints WHERE local_identifier = ?;"
-        var statement: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            for id in identifiers {
-                sqlite3_bind_text(statement, 1, (id as NSString).utf8String, -1, nil)
-                sqlite3_step(statement)
-                sqlite3_reset(statement)
-            }
+        let idSet = Set(identifiers)
+        let descriptor = FetchDescriptor<CachedFeaturePrint>()
+        guard let models = try? modelContext.fetch(descriptor) else { return }
+        
+        for model in models where idSet.contains(model.localIdentifier) {
+            modelContext.delete(model)
         }
-        sqlite3_finalize(statement)
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        
+        try? modelContext.save()
+    }
+    
+    /// Clears all cached feature prints.
+    func clear() {
+        try? modelContext.delete(model: CachedFeaturePrint.self)
+        try? modelContext.save()
     }
 }
